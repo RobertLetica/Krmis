@@ -1,0 +1,184 @@
+#!/bin/bash
+
+# Funkcija za pauzu
+pause(){
+   read -p "Pritisnite [Enter] za nastavak..." fackEnterKey
+}
+
+clear
+echo "=========================================================="
+echo "    DINAMIČKA AUTOMATIZACIJA SERVISA - LINUX MINT        "
+echo "=========================================================="
+echo "1) DHCP (Kea) - postavlja i IP servera"
+echo "2) DNS (Bind9) - postavlja i IP servera"
+echo "3) FTP (vsftpd) - s kreiranjem korisnika"
+echo "4) SSH (OpenSSH) - osnovna instalacija"
+echo "5) Izlaz"
+echo "=========================================================="
+read -p "Odaberite opciju [1-5]: " opcija
+
+case $opcija in
+    1)
+        echo "--- KONFIGURACIJA DHCP (KEA) ---"
+        read -p "Unesite naziv sučelja (npr. ens33): " INTERFACE
+        read -p "Unesite IP adresu OVOG SERVERA (npr. 172.16.2.10): " SERVER_IP
+        read -p "Unesite mrežnu adresu (npr. 172.16.2.0): " NETWORK
+        read -p "Unesite subnet masku (u CIDR formatu, npr. 24): " MASK
+        read -p "Unesite POOL START (npr. 172.16.2.30): " P_START
+        read -p "Unesite POOL END (npr. 172.16.2.50): " P_END
+        read -p "Unesite IP Gateway-a (Router): " GW
+        read -p "Unesite IP DNS servera (obično isti kao server): " DNS_IP
+
+        # KLJUČNI POPRAVAK: Postavljanje IP adrese na sučelje da bi Kea mogla raditi
+        echo "Postavljam IP adresu $SERVER_IP na $INTERFACE..."
+        sudo ip addr flush dev $INTERFACE
+        sudo ip addr add $SERVER_IP/$MASK dev $INTERFACE
+        sudo ip link set $INTERFACE up
+
+        sudo apt update && sudo apt install kea-dhcp4-server -y
+        
+        # Generiranje konfiguracije
+        cat <<EOF | sudo tee /etc/kea/kea-dhcp4.conf
+{
+"Dhcp4": {
+    "interfaces-config": {
+        "interfaces": ["$INTERFACE"]
+    },
+    "control-socket": {
+        "socket-type": "unix",
+        "socket-name": "/tmp/kea4-ctrl-socket"
+    },
+    "lease-database": {
+        "type": "memfile",
+        "lfc-interval": 3600
+    },
+    "subnet4": [
+        {
+            "subnet": "$NETWORK/$MASK",
+            "pools": [ { "pool": "$P_START - $P_END" } ],
+            "option-data": [
+                { "name": "domain-name-servers", "data": "$DNS_IP" },
+                { "name": "routers", "data": "$GW" }
+            ],
+            "valid-lifetime": 7200
+        }
+    ]
+}
+}
+EOF
+        # Provjera sintakse i restart
+        echo "Provjera konfiguracije..."
+        sudo kea-dhcp4 -t /etc/kea/kea-dhcp4.conf
+        sudo systemctl restart kea-dhcp4-server
+        sudo systemctl enable kea-dhcp4-server
+        
+        echo "DHCP Server status:"
+        sudo systemctl is-active kea-dhcp4-server
+        pause
+        ;;
+
+    2)
+        echo "--- KONFIGURACIJA DNS (BIND9) ---"
+        read -p "Unesite naziv sučelja (npr. ens33): " INTERFACE
+        read -p "Unesite IP adresu ovog servera (npr. 172.16.2.10): " SERVER_IP
+        read -p "Unesite naziv domene (npr. krmis.tsrb.com): " DOMAIN
+        
+        # Postavljanje IP-a ako nije postavljen
+        sudo ip addr add $SERVER_IP/24 dev $INTERFACE 2>/dev/null
+
+        REV_ZONE=$(echo $SERVER_IP | awk -F. '{print $3"."$2"."$1}')
+        LAST_OCTET=$(echo $SERVER_IP | awk -F. '{print $4}')
+
+        sudo apt update && sudo apt install bind9 -y
+
+        # named.conf.local
+        cat <<EOF | sudo tee /etc/bind/named.conf.local
+zone "$DOMAIN" IN {
+    type master;
+    file "/etc/bind/db.$DOMAIN";
+};
+zone "$REV_ZONE.in-addr.arpa" {
+    type master;
+    file "/etc/bind/db.$REV_ZONE";
+};
+EOF
+
+        # Forward Zone
+        cat <<EOF | sudo tee /etc/bind/db.$DOMAIN
+\$TTL 604800
+@ IN SOA ns.$DOMAIN. admin.$DOMAIN. (
+    $(date +%Y%m%d)01 604800 86400 2419200 604800 )
+@ IN NS ns.$DOMAIN.
+ns IN A $SERVER_IP
+@ IN A $SERVER_IP
+www IN CNAME @
+EOF
+
+        # Reverse Zone
+        cat <<EOF | sudo tee /etc/bind/db.$REV_ZONE
+\$TTL 604800
+@ IN SOA ns.$DOMAIN. root.ns.$DOMAIN. (
+    $(date +%Y%m%d)01 604800 86400 2419200 604800 )
+@ IN NS ns.$DOMAIN.
+$LAST_OCTET IN PTR ns.$DOMAIN.
+EOF
+        sudo systemctl restart bind9
+        echo "DNS Server konfiguriran i Bind9 restartan."
+        pause
+        ;;
+
+    3)
+        echo "--- KONFIGURACIJA FTP (VSFTPD) ---"
+        read -p "Unesite korisničko ime (npr. fifi): " FTP_USER
+        read -p "Unesite lozinku: " FTP_PASS
+
+        sudo apt update && sudo apt install vsftpd -y
+        
+        # Postavke iz LV10 vježbe
+        cat <<EOF | sudo tee /etc/vsftpd.conf
+listen=YES
+listen_ipv6=NO
+anonymous_enable=NO
+local_enable=YES
+write_enable=YES
+chroot_local_user=YES
+allow_writeable_chroot=YES
+user_sub_token=\$USER
+local_root=/home/\$USER/ftp
+userlist_enable=YES
+userlist_file=/etc/vsftpd.userlist
+userlist_deny=NO
+EOF
+
+        # Kreiranje korisnika i strukture mapa
+        sudo useradd -m -s /bin/bash $FTP_USER
+        echo "$FTP_USER:$FTP_PASS" | sudo chpasswd
+        echo "$FTP_USER" | sudo tee -a /etc/vsftpd.userlist
+        
+        sudo mkdir -p /home/$FTP_USER/ftp/dupload
+        sudo chown -R $FTP_USER:$FTP_USER /home/$FTP_USER/ftp
+        sudo chmod 555 /home/$FTP_USER/ftp
+        sudo chmod 777 /home/$FTP_USER/ftp/dupload
+
+        sudo systemctl restart vsftpd
+        echo "FTP servis spreman za korisnika $FTP_USER."
+        pause
+        ;;
+
+    4)
+        echo "--- INSTALACIJA SSH ---"
+        sudo apt update && sudo apt install openssh-server -y
+        sudo systemctl enable --now ssh
+        echo "SSH je aktivan."
+        pause
+        ;;
+
+    5)
+        exit 0
+        ;;
+    *)
+        echo "Pogrešan unos."
+        sleep 1
+        $0 
+        ;;
+esac
