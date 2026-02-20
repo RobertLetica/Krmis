@@ -71,8 +71,34 @@ get_yes_no() {
 
 # Service Functions
 
+configure_static_ip() {
+    echo "--- Static IP Configuration ---"
+
+    get_input "Interface name (e.g., ens33)" INTERFACE
+
+    while true; do
+        get_input "IP Address (e.g., 172.16.2.10)" IP_ADDR
+        if validate_ip "$IP_ADDR"; then break; else error "Invalid IP format."; fi
+    done
+
+    get_input "Subnet Mask (CIDR, e.g., 24)" MASK
+
+    warn "This will flush the IP configuration for $INTERFACE and set it to $IP_ADDR/$MASK."
+    if get_yes_no "Do you want to proceed?" "y"; then
+        log "Configuring interface $INTERFACE..."
+        ip addr flush dev "$INTERFACE"
+        ip addr add "$IP_ADDR/$MASK" dev "$INTERFACE"
+        ip link set "$INTERFACE" up
+        log "Interface $INTERFACE configured."
+    else
+        log "Skipping interface configuration."
+    fi
+    pause
+}
+
 install_dhcp() {
     echo "--- DHCP Configuration (Kea) ---"
+    warn "Ensure the network interface is configured with a static IP before proceeding."
 
     get_input "Interface name (e.g., ens33)" INTERFACE
 
@@ -88,16 +114,6 @@ install_dhcp() {
     get_input "Gateway IP" GW
     get_input "DNS Server IP" DNS_IP "$SERVER_IP"
     get_input "Lease Time (seconds)" LEASE_TIME "3600"
-
-    warn "This will flush the IP configuration for $INTERFACE and set it to $SERVER_IP/$MASK."
-    if get_yes_no "Do you want to proceed?" "y"; then
-        log "Configuring interface $INTERFACE..."
-        ip addr flush dev "$INTERFACE"
-        ip addr add "$SERVER_IP/$MASK" dev "$INTERFACE"
-        ip link set "$INTERFACE" up
-    else
-        log "Skipping interface configuration."
-    fi
 
     log "Installing Kea DHCP Server..."
     apt update && apt install kea-dhcp4-server -y
@@ -145,14 +161,11 @@ EOF
 
 install_dns() {
     echo "--- DNS Configuration (Bind9) ---"
+    warn "Ensure the network interface is configured with a static IP before proceeding."
 
-    get_input "Interface name (e.g., ens33)" INTERFACE
+    get_input "Interface name (e.g., ens33)" INTERFACE # Kept for consistency/potential logging, though Bind binds to all by default usually
     get_input "Server IP" SERVER_IP
     get_input "Domain Name (e.g., example.com)" DOMAIN
-
-    if get_yes_no "Configure IP address on interface?" "n"; then
-        ip addr add "$SERVER_IP/24" dev "$INTERFACE" 2>/dev/null
-    fi
 
     # Calculate reverse zone defaults
     REV_ZONE_DEFAULT=$(echo "$SERVER_IP" | awk -F. '{print $3"."$2"."$1}')
@@ -326,20 +339,22 @@ while true; do
     echo "=========================================================="
     echo "    DYNAMIC SERVICE AUTOMATION - LINUX MINT        "
     echo "=========================================================="
-    echo "1) DHCP (Kea)"
-    echo "2) DNS (Bind9)"
-    echo "3) FTP (vsftpd)"
-    echo "4) SSH (OpenSSH)"
-    echo "5) Exit"
+    echo "1) Configure Static IP"
+    echo "2) DHCP (Kea)"
+    echo "3) DNS (Bind9)"
+    echo "4) FTP (vsftpd)"
+    echo "5) SSH (OpenSSH)"
+    echo "6) Exit"
     echo "=========================================================="
-    read -p "Select option [1-5]: " option
+    read -p "Select option [1-6]: " option
 
     case $option in
-        1) install_dhcp ;;
-        2) install_dns ;;
-        3) install_ftp ;;
-        4) install_ssh ;;
-        5) exit 0 ;;
+        1) configure_static_ip ;;
+        2) install_dhcp ;;
+        3) install_dns ;;
+        4) install_ftp ;;
+        5) install_ssh ;;
+        6) exit 0 ;;
         *) echo "Invalid option." ;;
     esac
 done
