@@ -77,11 +77,11 @@ configure_static_ip() {
     get_input "Interface name (e.g., ens33)" INTERFACE
 
     while true; do
-        get_input "IP Address (e.g., 172.16.2.10)" IP_ADDR
+        get_input "IP Address" IP_ADDR "172.16.1.10"
         if validate_ip "$IP_ADDR"; then break; else error "Invalid IP format."; fi
     done
 
-    get_input "Subnet Mask (CIDR, e.g., 24)" MASK
+    get_input "Subnet Mask (CIDR)" MASK "24"
 
     warn "This will flush the IP configuration for $INTERFACE and set it to $IP_ADDR/$MASK."
     if get_yes_no "Do you want to proceed?" "y"; then
@@ -103,17 +103,18 @@ install_dhcp() {
     get_input "Interface name (e.g., ens33)" INTERFACE
 
     while true; do
-        get_input "Server IP (e.g., 172.16.2.10)" SERVER_IP
+        get_input "Server IP" SERVER_IP "172.16.1.10"
         if validate_ip "$SERVER_IP"; then break; else error "Invalid IP format."; fi
     done
 
-    get_input "Network address (e.g., 172.16.2.0)" NETWORK
-    get_input "Subnet mask (CIDR, e.g., 24)" MASK
-    get_input "Pool Start (e.g., 172.16.2.30)" P_START
-    get_input "Pool End (e.g., 172.16.2.50)" P_END
+    get_input "Network address" NETWORK "172.16.1.0"
+    get_input "Subnet mask (CIDR)" MASK "24"
+    get_input "Pool Start" P_START "172.16.1.20"
+    get_input "Pool End" P_END "172.16.1.40"
     get_input "Gateway IP" GW
     get_input "DNS Server IP" DNS_IP "$SERVER_IP"
-    get_input "Lease Time (seconds)" LEASE_TIME "3600"
+    get_input "Default Lease Time (seconds)" LEASE_TIME "360"
+    get_input "Max Lease Time (seconds)" MAX_LEASE_TIME "300"
 
     log "Installing Kea DHCP Server..."
     apt update && apt install kea-dhcp4-server -y
@@ -141,7 +142,8 @@ install_dhcp() {
                 { "name": "domain-name-servers", "data": "$DNS_IP" },
                 { "name": "routers", "data": "$GW" }
             ],
-            "valid-lifetime": $LEASE_TIME
+            "valid-lifetime": $LEASE_TIME,
+            "max-valid-lifetime": $MAX_LEASE_TIME
         }
     ]
 }
@@ -163,15 +165,15 @@ install_dns() {
     echo "--- DNS Configuration (Bind9) ---"
     warn "Ensure the network interface is configured with a static IP before proceeding."
 
-    get_input "Interface name (e.g., ens33)" INTERFACE # Kept for consistency/potential logging, though Bind binds to all by default usually
-    get_input "Server IP" SERVER_IP
-    get_input "Domain Name (e.g., example.com)" DOMAIN
+    get_input "Interface name (e.g., ens33)" INTERFACE # Kept for consistency
+    get_input "Server IP" SERVER_IP "172.16.1.10"
+    get_input "Domain Name" DOMAIN "test.tsrb.com"
 
     # Calculate reverse zone defaults
     REV_ZONE_DEFAULT=$(echo "$SERVER_IP" | awk -F. '{print $3"."$2"."$1}')
     LAST_OCTET=$(echo "$SERVER_IP" | awk -F. '{print $4}')
 
-    get_input "Reverse Zone Prefix (e.g., 2.16.172)" REV_ZONE "$REV_ZONE_DEFAULT"
+    get_input "Reverse Zone Prefix (e.g., 1.16.172)" REV_ZONE "$REV_ZONE_DEFAULT"
 
     log "Installing Bind9..."
     apt update && apt install bind9 -y
@@ -250,7 +252,7 @@ install_ftp() {
     apt update && apt install vsftpd -y
 
     ANON_ENABLE="NO"
-    if get_yes_no "Enable Anonymous Access?" "n"; then
+    if get_yes_no "Enable Anonymous Access (NO = Authorized Only)?" "n"; then
         ANON_ENABLE="YES"
     fi
 
